@@ -693,9 +693,18 @@ function renderNews(){
 /* ───────── MEMO ───────── */
 let MEMOS=[],TAGS=[],mSelTags=new Set(),mFilter="전체",mEditId=null;
 function loadMemo(){
-  try{MEMOS=JSON.parse(localStorage.getItem("commodity_memos")||"[]")}catch(e){MEMOS=[]}
+  // localStorage(이 브라우저에 쌓인 것) + 배포 HTML에 구워진 것(memos-data)을 id 기준으로 병합.
+  let ls=[];try{ls=JSON.parse(localStorage.getItem("commodity_memos")||"[]")}catch(e){ls=[]}
+  const baked=readJSON("memos-data"); // {memos,tags} | 배열 | null
+  const bmemos=baked?(Array.isArray(baked)?baked:(baked.memos||[])):[];
+  const byId={},extra=[];
+  const take=arr=>arr.forEach(m=>{if(!m)return;m.id?byId[m.id]=m:extra.push(m);});
+  take(bmemos);take(ls); // 로컬을 나중에 넣어 id 충돌 시 로컬(방금 수정분) 우선
+  MEMOS=[...Object.values(byId),...extra];
   try{TAGS=JSON.parse(localStorage.getItem("commodity_tags")||"null")}catch(e){TAGS=null}
+  if(!TAGS&&baked&&baked.tags)TAGS=baked.tags;
   if(!TAGS){TAGS=[...new Set(DATA.meta.map(m=>m.sector))];}
+  try{saveMemoLS();}catch(e){} // 병합 결과를 로컬에 반영 → 다음 업로드·새로고침에도 유지
 }
 function saveMemoLS(){localStorage.setItem("commodity_memos",JSON.stringify(MEMOS));localStorage.setItem("commodity_tags",JSON.stringify(TAGS));}
 function renderTagPool(){
@@ -737,9 +746,15 @@ function saveMemo(){
 function exportDeploy(){
   const json=JSON.stringify({dates:DATA.dates,meta:DATA.meta,prices:DATA.prices,news:DATA.news}).replace(/<\/script>/g,"<\\/script>");
   const tag=$("#embedded-data");const prev=tag.textContent;tag.textContent=json;
+  // 노트/태그도 배포 파일에 함께 굽는다 → 파일을 따라다니며 누적 유지 (뷰 모드에선 화면에 안 뜸)
+  const mjson=JSON.stringify({memos:MEMOS,tags:TAGS}).replace(/<\/script>/g,"<\\/script>");
+  let mtag=$("#memos-data"),mCreated=false;
+  if(!mtag){mtag=document.createElement("script");mtag.id="memos-data";mtag.type="application/json";document.head.appendChild(mtag);mCreated=true;}
+  const mprev=mtag.textContent;mtag.textContent=mjson;
   const html="<!DOCTYPE html>\n"+document.documentElement.outerHTML;
   tag.textContent=prev;
-  download("index.html",html);toast("배포용 index.html 생성됨 · GitHub에 올리고 ?mode=view 로 공유");
+  if(mCreated)mtag.remove();else mtag.textContent=mprev; // 라이브 DOM은 원상복구
+  download("commo_dashboard.html",html);toast(`commo_dashboard.html 생성됨 · 노트 ${MEMOS.length}건 포함 · GitHub 덮어쓰기 → ?mode=view 공유`);
 }
 function download(name,content){const b=new Blob([content],{type:"text/html;charset=utf-8"});const u=URL.createObjectURL(b);
   const a=document.createElement("a");a.href=u;a.download=name;a.click();URL.revokeObjectURL(u);}
@@ -880,7 +895,12 @@ $("#m-date").value=new Date().toISOString().slice(0,10);
 $("#m-export").onclick=()=>{download("commodity_memos.json",JSON.stringify({memos:MEMOS,tags:TAGS},null,2));};
 $("#m-import").onclick=()=>$("#m-file").click();
 $("#m-file").onchange=e=>{const f=e.target.files[0];if(!f)return;const rd=new FileReader();
-  rd.onload=ev=>{try{const o=JSON.parse(ev.target.result);if(o.memos)MEMOS=o.memos;if(o.tags)TAGS=o.tags;saveMemoLS();renderTagPool();renderMemo();toast("가져오기 완료");}catch(err){toast("JSON 형식 오류");}};rd.readAsText(f);};
+  rd.onload=ev=>{try{const o=JSON.parse(ev.target.result);
+    const inc=o.memos||(Array.isArray(o)?o:[]);
+    const byId={};MEMOS.forEach(m=>{if(m&&m.id)byId[m.id]=m;});inc.forEach(m=>{if(m&&m.id)byId[m.id]=m;}); // 기존 유지 + 새 항목 병합(가져온 쪽 우선)
+    MEMOS=Object.values(byId);
+    if(o.tags)TAGS=[...new Set([...(TAGS||[]),...o.tags])];
+    saveMemoLS();renderTagPool();renderMemo();toast(`가져오기 완료 · 총 ${MEMOS.length}건`);}catch(err){toast("JSON 형식 오류");}};rd.readAsText(f);};
 
 loadInitial();
 </script>
